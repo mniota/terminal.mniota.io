@@ -1,10 +1,12 @@
 import { useState, useEffect } from "react";
 import * as React from "react";
-import { useWebSerial } from "@mniota/react-webserial-hook";
+import { useWebSerial } from "./react-webserial-hook";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import * as PropTypes from "prop-types";
 import { Popover } from "@headlessui/react";
+
+import { ESPLoader, Transport } from "esptool-js";
 
 /**
  *
@@ -18,11 +20,8 @@ export function Console({ className }) {
   const xtermRef = React.useRef(null);
 
   const serial = useWebSerial({
-    onData: (data) => {
-      if (xtermRef.current) {
-        xtermRef.current.xterm.write(data);
-      }
-    },
+    onConnect: port => console.log('connected', port),
+    onDisconnect: port => console.log('disconnected', port)
   });
 
   const [termCols, setTermCols] = useState(0);
@@ -35,6 +34,8 @@ export function Console({ className }) {
       term.loadAddon(term.fitAddon);
       term.open(xtermRef.current);
       term.fitAddon.fit();
+      setTermCols(term.cols);
+      setTermRows(term.rows);
     }
 
     () => {
@@ -56,14 +57,14 @@ export function Console({ className }) {
   }, []);
 
   useEffect(() => {
-    if (serial.port && serial.isOpen) {
-      xtermRef.current.xterm.onData((chunk) => {
-        let utf8Encode = new TextEncoder();
-        serial.write(utf8Encode.encode(chunk));
-      });
-      return () => {};
-    }
-  }, [serial.port]);
+    const listener = xtermRef.current.xterm.onData((chunk) => {
+      let utf8Encode = new TextEncoder();
+      serial.write(utf8Encode.encode(chunk));
+    });
+    return () => {
+      listener.dispose()
+    };
+  }, [xtermRef]);
 
   const resetEsp = async () => {
     if (serial.isOpen) {
@@ -73,6 +74,34 @@ export function Console({ className }) {
       await serial.port.setSignals({ requestToSend: false });
     }
   };
+
+  let espLoaderTerminal = {
+    clean() {
+      let term = xtermRef.current.xterm;
+      term.clear();
+    },
+    writeLine(data) {
+      let term = xtermRef.current.xterm;
+      term.writeln(data);
+    },
+    write(data) {
+      let term = xtermRef.current.xterm;
+      term.write(data)
+    }
+  }
+
+  const espInfo = async () => {
+    const transport = new Transport(serial.port);
+    const esploader = new ESPLoader(transport, 921600, espLoaderTerminal);
+    // const chip = await esploader.main_fn();
+    await esploader.detect_chip();
+    await esploader.flash_id();
+    await esploader.run_stub()
+    // await esploader.connect()
+    // await esploader.flash_id()
+    // await esploader.flash_size_bytes()
+    // console.log(esploader.chip)
+  }
 
   return (
     <div className={className + " flex flex-col bg-black min-h-0"}>
@@ -103,33 +132,30 @@ export function Console({ className }) {
             Close
           </button>
         )}
-        {serial.isReading ? (
-          <button
-            onClick={async () => {
-              if (serial.isReading) {
-                await serial.stopReading();
-              }
-            }}
-            className="border-slate-500 border-2 pl-1 pr-1 pd-1"
-            title="Stop reading"
-          >
-            Reading
-          </button>
-        ) : (
-          <button
-            onClick={async () => {
-              if (!serial.isOpen) {
-                await serial.openPort();
-              }
+        <button
+          onClick={async () => {
+            if (!serial.isOpen) {
+              await serial.openPort();
+            }
 
-              await serial.startReading();
-            }}
-            className="border-slate-500 border-2 pl-1 pr-1 pd-1"
-            title="Start reading"
-          >
-            Idle
-          </button>
-        )}
+            try {
+              // eslint-disable-next-line no-constant-condition
+              while (true) {
+                let data = await serial.read();
+                if (data) {
+                  xtermRef.current.xterm.write(data)
+                  continue;
+                }
+              }
+            } catch(e) {
+              console.log(e)
+            }
+          }}
+          className="border-slate-500 border-2 pl-1 pr-1 pd-1"
+          title="Start reading"
+        >
+          Idle
+        </button>
         <div
           className="border-slate-500 border-2 pl-1 pr-1 pd-1"
           title="Current Port"
@@ -327,11 +353,16 @@ export function Console({ className }) {
             <Popover.Button>Macros</Popover.Button>
             <Popover.Panel className="absolute bottom-7 bg-slate-700 w-48">
               <ul>
-              <li className="hover:bg-slate-900 p-1 text-center">
-                  <Popover.Button
-                    onClick={() => resetEsp()}
-                  >
+                <li className="hover:bg-slate-900 p-1 text-center">
+                  <Popover.Button onClick={() => resetEsp()}>
                     Reset ESP Device
+                  </Popover.Button>
+                </li>
+                <li className="hover:bg-slate-900 p-1 text-center">
+                  <Popover.Button
+                    onClick={() => espInfo()}
+                  >
+                    ESP Info
                   </Popover.Button>
                 </li>
               </ul>
